@@ -521,7 +521,10 @@ bool calResultOk = false;
 // สิ่งที่วาดบนจอไปล่าสุด (วาดเฉพาะส่วนที่เปลี่ยน)
 constexpr int NEVER = -32768;
 char netLabel[24] = "";  // IP สำหรับเปิดหน้าเว็บ ที่แถบสถานะแสดง (ส่วนเครือข่ายเขียน) "" = ยังไม่มี IP
-int drawnStatus = NEVER;
+char drawnNetLabel[sizeof(netLabel)] = "";
+int drawnBtConnected = NEVER;
+int drawnWaiting = NEVER;
+bool statusBarInitialized = false;
 int drawnFaultBadge = NEVER;
 int drawnSpeed = NEVER;
 int drawnRpmText = NEVER;
@@ -2457,32 +2460,46 @@ void updateStatusBar(uint32_t now)
 {
     const bool connected = btConnected();
     const bool waiting = connected && !isRealData(now);
-    uint32_t h = (connected ? 1 : 0) | (waiting ? 2 : 0);
-    for (const char *p = netLabel; *p != '\0'; p++) h = h * 31 + static_cast<uint8_t>(*p);
-    const int key = static_cast<int>(h & 0x3FFFFFFF);
-    if (key == drawnStatus) return;
-    drawnStatus = key;
-
-    tft.fillRect(0, 0, SCREEN_W, STATUS_H, T->bg);
-    tft.drawFastHLine(0, STATUS_H, SCREEN_W, T->line);
-
     const char *text = connected ? "BT CONNECTED" : "BT DISCONNECTED";
     const uint16_t color = connected ? T->ok : T->bad;
-    const int16_t w = textWidthIn(FONT_10B, text);
-    const int16_t pillW = w + 22;  // จุด 6 + ช่องว่าง + ข้อความ
-    const int16_t x = SCREEN_W - 6 - pillW;
-    tft.fillRoundRect(x, 3, pillW, 16, 8, T->surf);
-    tft.drawRoundRect(x, 3, pillW, 16, 8, color);
-    tft.fillSmoothCircle(x + 10, 11, 3, color, T->surf);
-    textAt(FONT_10B, text, x + 17, 15, L_BASELINE, color, T->surf);
+    // ความกว้างคงที่ ป้องกันตำแหน่งป้าย BT ขยับเมื่อข้อความเปลี่ยน
+    const int16_t pillW = max(textWidthIn(FONT_10B, "BT CONNECTED"), textWidthIn(FONT_10B, "BT DISCONNECTED")) + 22;
+    const int16_t pillX = SCREEN_W - 6 - pillW;
+    const char *label = netLabel[0] != '\0' ? netLabel : "OBD-II";
+    const bool netChanged = !statusBarInitialized || strcmp(drawnNetLabel, netLabel) != 0;
+    const bool btChanged = !statusBarInitialized || drawnBtConnected != static_cast<int>(connected);
+    const bool waitChanged = !statusBarInitialized || drawnWaiting != static_cast<int>(waiting) || netChanged;
 
-    const int16_t tw = textAt(FONT_11B, netLabel[0] != '\0' ? netLabel : "OBD-II", 8, 15, L_BASELINE, T->text, T->bg);
-    const int waitX = 8 + tw + 8;
-    const int waitW = x - 8 - waitX;
-    if (waiting && waitW >= 30) {
-        char wait[24];
-        fitText(FONT_10S, "WAITING FOR ECU", waitW, wait, sizeof(wait));
-        textAt(FONT_10S, wait, waitX, 15, L_BASELINE, T->muted, T->bg);
+    if (!statusBarInitialized) {
+        tft.fillRect(0, 0, SCREEN_W, STATUS_H, T->bg);
+        tft.drawFastHLine(0, STATUS_H, SCREEN_W, T->line);
+        statusBarInitialized = true;
+    }
+
+    // เครือข่ายมีการวาดแยกจาก BT เพื่อไม่ให้ AP/IP กะพริบตอน BT เปลี่ยนสถานะ
+    if (netChanged) {
+        tft.fillRect(0, 0, pillX - 4, STATUS_H, T->bg);
+        textAt(FONT_11B, label, 8, 15, L_BASELINE, T->text, T->bg);
+        strlcpy(drawnNetLabel, netLabel, sizeof(drawnNetLabel));
+    }
+    if (waitChanged) {
+        const int16_t labelW = textWidthIn(FONT_11B, label);
+        const int16_t waitX = 8 + labelW + 8;
+        const int16_t waitW = pillX - 4 - waitX;
+        tft.fillRect(waitX, 0, waitW > 0 ? waitW : 0, STATUS_H, T->bg);
+        if (waiting && waitW >= 30) {
+            char wait[24];
+            fitText(FONT_10S, "WAITING FOR ECU", waitW, wait, sizeof(wait));
+            textAt(FONT_10S, wait, waitX, 15, L_BASELINE, T->muted, T->bg);
+        }
+        drawnWaiting = waiting;
+    }
+    if (btChanged) {
+        tft.fillRoundRect(pillX, 3, pillW, 16, 8, T->surf);
+        tft.drawRoundRect(pillX, 3, pillW, 16, 8, color);
+        tft.fillSmoothCircle(pillX + 10, 11, 3, color, T->surf);
+        textAt(FONT_10B, text, pillX + 17, 15, L_BASELINE, color, T->surf);
+        drawnBtConnected = connected;
     }
 }
 
@@ -3831,7 +3848,10 @@ void redrawWidget(Widget w)
 // =====================================================================
 void resetDrawnKeys()
 {
-    drawnStatus = NEVER;
+    statusBarInitialized = false;
+    drawnNetLabel[0] = '\0';
+    drawnBtConnected = NEVER;
+    drawnWaiting = NEVER;
     drawnFaultBadge = NEVER;
     drawnSpeed = NEVER;
     drawnRpmText = NEVER;
